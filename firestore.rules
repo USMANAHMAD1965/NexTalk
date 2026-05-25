@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Development rules for this chat app:
+    // signed-in Firebase Auth users can use chat data, signed-out users cannot.
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
