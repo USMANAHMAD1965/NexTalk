@@ -14,9 +14,10 @@ class AppColors {
 }
 
 class ZegoSettings {
-  // Replace with your ZegoCloud AppID and AppSign before production calls.
-  static const int appId = 0;
-  static const String appSign = '';
+  // For production, prefer token-based auth from a trusted server.
+  static const int appId = 1723908006;
+  static const String appSign =
+      '021e38e4e579bda0bb60b0f04be7d833b001682c5f13f57cac4a36a746e86c47';
 
   static bool get isConfigured => appId != 0 && appSign.isNotEmpty;
 }
