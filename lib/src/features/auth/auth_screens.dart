@@ -69,28 +69,74 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController(text: 'programmer@gmail.com');
-  final _passwordController = TextEditingController(text: 'password');
+  final _phoneController = TextEditingController();
+  final _codeController = TextEditingController();
+  String? _verificationId;
   bool _loading = false;
+  bool _codeSent = false;
 
   @override
   void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
+    _phoneController.dispose();
+    _codeController.dispose();
     super.dispose();
   }
 
-  Future<void> _signIn() async {
-    if (_emailController.text.trim().isEmpty ||
-        _passwordController.text.isEmpty) {
-      showAppSnack(context, 'Please enter your email and password.');
+  Future<void> _sendCode() async {
+    final phone = _phoneController.text.trim();
+    if (!phone.startsWith('+') || phone.length < 8) {
+      showAppSnack(context, 'Enter phone number with country code.');
       return;
     }
+    if (!widget.repository.firebaseEnabled) {
+      showAppSnack(
+        context,
+        'Firebase is not configured, so demo mode will not send a real OTP.',
+      );
+    }
+
+    setState(() => _loading = true);
+    await widget.repository.startPhoneOtp(
+      phoneNumber: phone,
+      onCodeSent: (verificationId) {
+        if (!mounted) return;
+        setState(() {
+          _verificationId = verificationId;
+          _codeSent = true;
+          _loading = false;
+        });
+        showAppSnack(context, 'OTP code sent.');
+      },
+      onAutoVerified: (user) {
+        if (!mounted) return;
+        widget.onAuthenticated(user);
+      },
+      onFailed: (message) {
+        if (!mounted) return;
+        setState(() => _loading = false);
+        showAppSnack(context, message);
+      },
+    );
+  }
+
+  Future<void> _verifyCode() async {
+    final verificationId = _verificationId;
+    final code = _codeController.text.trim();
+    if (verificationId == null) {
+      showAppSnack(context, 'Request an OTP code first.');
+      return;
+    }
+    if (code.length < 6) {
+      showAppSnack(context, 'Enter the 6 digit OTP code.');
+      return;
+    }
+
     setState(() => _loading = true);
     try {
-      final user = await widget.repository.signIn(
-        email: _emailController.text,
-        password: _passwordController.text,
+      final user = await widget.repository.confirmPhoneOtp(
+        verificationId: verificationId,
+        smsCode: code,
+        phoneNumber: _phoneController.text,
       );
       if (!mounted) return;
       widget.onAuthenticated(user);
@@ -102,62 +148,46 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _openPhoneAuth() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => PhoneAuthScreen(
-          repository: widget.repository,
-          onAuthenticated: widget.onAuthenticated,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AuthLayout(
-      title: 'Welcome Back!',
-      subtitle: 'Sign in to continue chatting with your friends',
-      headerIcon: Icons.chat_bubble_rounded,
+      title: 'Welcome Back',
+      subtitle: 'Enter your phone number with country code to receive an OTP',
+      headerIcon: Icons.phone_iphone_rounded,
       child: Column(
         children: [
           AppTextField(
-            controller: _emailController,
-            hintText: 'Email',
-            icon: Icons.email_outlined,
-            keyboardType: TextInputType.emailAddress,
+            controller: _phoneController,
+            hintText: 'Phone Number (+923001234567)',
+            icon: Icons.phone_outlined,
+            keyboardType: TextInputType.phone,
+            textInputAction: _codeSent
+                ? TextInputAction.next
+                : TextInputAction.send,
           ),
-          const SizedBox(height: 12),
-          AppTextField(
-            controller: _passwordController,
-            hintText: 'Password',
-            icon: Icons.lock_outline,
-            obscureText: true,
-          ),
+          if (_codeSent) ...[
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: _codeController,
+              hintText: 'OTP Code',
+              icon: Icons.password_rounded,
+              keyboardType: TextInputType.number,
+            ),
+          ],
           const SizedBox(height: 18),
           PrimaryButton(
-            label: 'Sign In',
+            label: _codeSent ? 'Verify OTP' : 'Send OTP',
+            icon: _codeSent ? Icons.verified_rounded : Icons.sms_rounded,
             loading: _loading,
-            onPressed: _signIn,
+            onPressed: _codeSent ? _verifyCode : _sendCode,
           ),
-          const SizedBox(height: 14),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      ForgotPasswordScreen(repository: widget.repository),
-                ),
-              );
-            },
-            child: const Text('Forgot Password?'),
-          ),
-          const SizedBox(height: 8),
-          SecondaryButton(
-            label: 'Continue with Phone',
-            icon: Icons.phone_iphone_rounded,
-            onPressed: _openPhoneAuth,
-          ),
+          if (_codeSent) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: _loading ? null : _sendCode,
+              child: const Text('Resend OTP'),
+            ),
+          ],
           const SizedBox(height: 16),
           const Divider(color: AppColors.line),
           const SizedBox(height: 16),
@@ -205,58 +235,95 @@ class CreateAccountScreen extends StatefulWidget {
 
 class _CreateAccountScreenState extends State<CreateAccountScreen> {
   final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _codeController = TextEditingController();
+  String? _verificationId;
   bool _loading = false;
+  bool _codeSent = false;
 
   @override
   void dispose() {
     _nameController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    _confirmPasswordController.dispose();
+    _phoneController.dispose();
+    _codeController.dispose();
     super.dispose();
   }
 
-  Future<void> _createAccount() async {
-    if (_nameController.text.trim().isEmpty ||
-        _emailController.text.trim().isEmpty ||
-        _passwordController.text.isEmpty) {
-      showAppSnack(context, 'Please complete all fields.');
+  Future<void> _sendCode() async {
+    final name = _nameController.text.trim();
+    final phone = _phoneController.text.trim();
+    if (name.isEmpty) {
+      showAppSnack(context, 'Please enter your username.');
       return;
     }
-    if (_passwordController.text != _confirmPasswordController.text) {
-      showAppSnack(context, 'Passwords do not match.');
+    if (!phone.startsWith('+') || phone.length < 8) {
+      showAppSnack(context, 'Enter phone number with country code.');
+      return;
+    }
+    if (!widget.repository.firebaseEnabled) {
+      showAppSnack(
+        context,
+        'Firebase is not configured, so demo mode will not send a real OTP.',
+      );
+    }
+
+    setState(() => _loading = true);
+    await widget.repository.startPhoneOtp(
+      phoneNumber: phone,
+      onCodeSent: (verificationId) {
+        if (!mounted) return;
+        setState(() {
+          _verificationId = verificationId;
+          _codeSent = true;
+          _loading = false;
+        });
+        showAppSnack(context, 'OTP code sent.');
+      },
+      onAutoVerified: (user) => unawaited(_finishSignup(user)),
+      onFailed: (message) {
+        if (!mounted) return;
+        setState(() => _loading = false);
+        showAppSnack(context, message);
+      },
+    );
+  }
+
+  Future<void> _verifyCode() async {
+    final verificationId = _verificationId;
+    final code = _codeController.text.trim();
+    if (verificationId == null) {
+      showAppSnack(context, 'Request an OTP code first.');
+      return;
+    }
+    if (code.length < 6) {
+      showAppSnack(context, 'Enter the 6 digit OTP code.');
       return;
     }
 
     setState(() => _loading = true);
     try {
-      await widget.repository.createAccount(
+      final user = await widget.repository.confirmPhoneOtp(
+        verificationId: verificationId,
+        smsCode: code,
+        phoneNumber: _phoneController.text,
+      );
+      await _finishSignup(user);
+    } on Object catch (error) {
+      if (!mounted) return;
+      showAppSnack(context, friendlyFirebaseError(error));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _finishSignup(AppUser user) async {
+    try {
+      final updatedUser = await widget.repository.updatePhoneUserDisplayName(
+        user: user,
         displayName: _nameController.text,
-        email: _emailController.text,
-        password: _passwordController.text,
       );
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Verify your email'),
-          content: Text(
-            'We sent a verification link to ${_emailController.text.trim()}. '
-            'Open that link, then come back and sign in.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      Navigator.of(context).pop();
+      widget.onAuthenticated(updatedUser);
     } on Object catch (error) {
       if (!mounted) return;
       showAppSnack(context, friendlyFirebaseError(error));
@@ -269,60 +336,50 @@ class _CreateAccountScreenState extends State<CreateAccountScreen> {
   Widget build(BuildContext context) {
     return AuthLayout(
       title: 'Create Account',
-      subtitle: 'Fill in your details to get started',
+      subtitle: 'Enter your username and phone number to receive an OTP',
       leading: const BackButton(),
+      headerIcon: Icons.person_add_alt_1_rounded,
       child: Column(
         children: [
           AppTextField(
             controller: _nameController,
-            hintText: 'Display Name',
+            hintText: 'User Name',
             icon: Icons.person_outline,
             textInputAction: TextInputAction.next,
           ),
           const SizedBox(height: 12),
           AppTextField(
-            controller: _emailController,
-            hintText: 'Email',
-            icon: Icons.email_outlined,
-            keyboardType: TextInputType.emailAddress,
-            textInputAction: TextInputAction.next,
+            controller: _phoneController,
+            hintText: 'Phone Number (+923001234567)',
+            icon: Icons.phone_outlined,
+            keyboardType: TextInputType.phone,
+            textInputAction: _codeSent
+                ? TextInputAction.next
+                : TextInputAction.send,
           ),
-          const SizedBox(height: 12),
-          AppTextField(
-            controller: _passwordController,
-            hintText: 'Password',
-            icon: Icons.lock_outline,
-            obscureText: true,
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 12),
-          AppTextField(
-            controller: _confirmPasswordController,
-            hintText: 'Confirm Password',
-            icon: Icons.lock_outline,
-            obscureText: true,
-          ),
+          if (_codeSent) ...[
+            const SizedBox(height: 12),
+            AppTextField(
+              controller: _codeController,
+              hintText: 'OTP Code',
+              icon: Icons.password_rounded,
+              keyboardType: TextInputType.number,
+            ),
+          ],
           const SizedBox(height: 18),
           PrimaryButton(
-            label: 'Create Account',
+            label: _codeSent ? 'Verify & Sign Up' : 'Send OTP',
+            icon: _codeSent ? Icons.verified_rounded : Icons.sms_rounded,
             loading: _loading,
-            onPressed: _createAccount,
+            onPressed: _codeSent ? _verifyCode : _sendCode,
           ),
-          const SizedBox(height: 12),
-          SecondaryButton(
-            label: 'Use Phone OTP',
-            icon: Icons.phone_iphone_rounded,
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => PhoneAuthScreen(
-                    repository: widget.repository,
-                    onAuthenticated: widget.onAuthenticated,
-                  ),
-                ),
-              );
-            },
-          ),
+          if (_codeSent) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: _loading ? null : _sendCode,
+              child: const Text('Resend OTP'),
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -376,6 +433,12 @@ class _PhoneAuthScreenState extends State<PhoneAuthScreen> {
     if (!phone.startsWith('+') || phone.length < 8) {
       showAppSnack(context, 'Enter phone number with country code.');
       return;
+    }
+    if (!widget.repository.firebaseEnabled) {
+      showAppSnack(
+        context,
+        'Firebase is not configured, so demo mode will not send a real OTP.',
+      );
     }
 
     setState(() => _loading = true);
@@ -473,86 +536,6 @@ class _PhoneAuthScreenState extends State<PhoneAuthScreen> {
               child: const Text('Resend OTP'),
             ),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-class ForgotPasswordScreen extends StatefulWidget {
-  const ForgotPasswordScreen({super.key, required this.repository});
-
-  final ChatRepository repository;
-
-  @override
-  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
-}
-
-class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
-  final _emailController = TextEditingController();
-  bool _loading = false;
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _sendReset() async {
-    if (_emailController.text.trim().isEmpty) {
-      showAppSnack(context, 'Please enter your email address.');
-      return;
-    }
-    setState(() => _loading = true);
-    try {
-      await widget.repository.sendPasswordReset(_emailController.text);
-      if (!mounted) return;
-      showAppSnack(context, 'Password reset link sent.');
-      Navigator.of(context).pop();
-    } on Object catch (error) {
-      if (!mounted) return;
-      showAppSnack(context, friendlyFirebaseError(error));
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AuthLayout(
-      title: 'Forgot Password',
-      subtitle: 'Enter your email to receive a password reset link',
-      leading: const BackButton(),
-      headerIcon: Icons.lock_reset_rounded,
-      child: Column(
-        children: [
-          AppTextField(
-            controller: _emailController,
-            hintText: 'Email Address',
-            icon: Icons.email_outlined,
-            keyboardType: TextInputType.emailAddress,
-          ),
-          const SizedBox(height: 18),
-          PrimaryButton(
-            label: 'Send Reset Link',
-            icon: Icons.send_rounded,
-            loading: _loading,
-            onPressed: _sendReset,
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                'Remember your password?',
-                style: TextStyle(color: AppColors.muted, fontSize: 13),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Sign In'),
-              ),
-            ],
-          ),
         ],
       ),
     );

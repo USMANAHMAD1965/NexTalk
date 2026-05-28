@@ -12,7 +12,9 @@
         "lib/firebase_options.dart": {
           "projectId": "fir-8b7cc",
           "configurations": {
-            "android": "1:213800371663:android:744babf684c2d0da703eba"
+            "android": "1:213800371663:android:744babf684c2d0da703eba",
+            "ios": "1:213800371663:ios:b25c9acc4ee7f9a1703eba",
+            "web": "1:213800371663:web:9f902e3323625b45703eba"
           }
         }
       }

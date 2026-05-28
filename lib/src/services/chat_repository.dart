@@ -6,6 +6,8 @@ class ChatRepository {
   ChatRepository.demo() : firebaseEnabled = false;
 
   final bool firebaseEnabled;
+  final Map<String, firebase_auth.ConfirmationResult> _webPhoneConfirmations =
+      <String, firebase_auth.ConfirmationResult>{};
 
   FirebaseFirestore get _db => FirebaseFirestore.instance;
 
@@ -143,35 +145,66 @@ class ChatRepository {
       return;
     }
 
-    await _auth.verifyPhoneNumber(
-      phoneNumber: phoneNumber.trim(),
-      verificationCompleted: (credential) async {
-        try {
-          final user = await _signInWithPhoneCredential(credential);
-          onAutoVerified(user);
-        } on Object catch (error) {
-          onFailed(friendlyFirebaseError(error));
-        }
-      },
-      verificationFailed: (error) => onFailed(friendlyFirebaseError(error)),
-      codeSent: (verificationId, _) => onCodeSent(verificationId),
-      codeAutoRetrievalTimeout: (_) {},
-    );
+    try {
+      if (kIsWeb) {
+        final confirmationResult = await _auth.signInWithPhoneNumber(
+          phoneNumber.trim(),
+        );
+        _webPhoneConfirmations[confirmationResult.verificationId] =
+            confirmationResult;
+        onCodeSent(confirmationResult.verificationId);
+        return;
+      }
+
+      await _auth.verifyPhoneNumber(
+        phoneNumber: phoneNumber.trim(),
+        verificationCompleted: (credential) async {
+          try {
+            final user = await _signInWithPhoneCredential(credential);
+            onAutoVerified(user);
+          } on Object catch (error) {
+            onFailed(friendlyFirebaseError(error));
+          }
+        },
+        verificationFailed: (error) => onFailed(friendlyFirebaseError(error)),
+        codeSent: (verificationId, _) => onCodeSent(verificationId),
+        codeAutoRetrievalTimeout: (_) {},
+      );
+    } on Object catch (error) {
+      onFailed(friendlyFirebaseError(error));
+    }
   }
 
   Future<AppUser> confirmPhoneOtp({
     required String verificationId,
     required String smsCode,
+    String? phoneNumber,
   }) async {
     if (!firebaseEnabled) {
       await Future<void>.delayed(const Duration(milliseconds: 450));
+      final phone = phoneNumber?.trim().isNotEmpty == true
+          ? phoneNumber!.trim()
+          : '+923001234567';
       return sampleCurrentUser.copyWith(
         id: 'demo-phone-user',
         displayName: 'Phone User',
-        email: '+923001234567',
+        email: phone,
         initial: 'P',
-        phoneNumber: '+923001234567',
+        phoneNumber: phone,
       );
+    }
+
+    if (kIsWeb) {
+      final confirmationResult = _webPhoneConfirmations.remove(verificationId);
+      if (confirmationResult == null) {
+        throw 'Request a fresh OTP code and try again.';
+      }
+      final credential = await confirmationResult.confirm(smsCode.trim());
+      final user = credential.user;
+      if (user == null) {
+        throw 'Phone verification failed. Please try again.';
+      }
+      return _appUserFromFirebaseUser(user);
     }
 
     final credential = firebase_auth.PhoneAuthProvider.credential(
@@ -179,6 +212,42 @@ class ChatRepository {
       smsCode: smsCode.trim(),
     );
     return _signInWithPhoneCredential(credential);
+  }
+
+  Future<AppUser> updatePhoneUserDisplayName({
+    required AppUser user,
+    required String displayName,
+  }) async {
+    final name = displayName.trim();
+    if (name.isEmpty) {
+      throw 'Please enter your username.';
+    }
+
+    final updatedUser = user.copyWith(
+      displayName: name,
+      initial: initialFromName(name),
+      online: true,
+    );
+
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return updatedUser;
+    }
+
+    final firebaseUser = _auth.currentUser;
+    if (firebaseUser?.uid == user.id) {
+      await firebaseUser?.updateDisplayName(name);
+    }
+    await _db.collection('users').doc(user.id).set({
+      'displayName': updatedUser.displayName,
+      'initial': updatedUser.initial,
+      'email': updatedUser.email,
+      'online': true,
+      if (updatedUser.phoneNumber != null)
+        'phoneNumber': updatedUser.phoneNumber,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return updatedUser;
   }
 
   Future<void> signOut() async {
@@ -372,8 +441,64 @@ class ChatRepository {
       'senderId': sender.id,
       'text': text,
       'type': 'text',
+      'status': 'sent',
+      'reactions': <String, int>{},
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> sendRichMessage({
+    required Conversation conversation,
+    required AppUser sender,
+    required ChatMessage message,
+  }) async {
+    if (!firebaseEnabled || conversation.id.startsWith('demo')) {
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      return;
+    }
+
+    final preview = _previewForMessage(message);
+    final conversationRef = _db
+        .collection('conversations')
+        .doc(conversation.id);
+    await conversationRef.set({
+      'participants': _sortedParticipantIds(sender.id, conversation.peer.id),
+      'participantInfo': {
+        sender.id: _userSummary(sender),
+        conversation.peer.id: _userSummary(conversation.peer),
+      },
+      'lastMessage': preview,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _upsertConnection(currentUser: sender, peer: conversation.peer);
+    await conversationRef.collection('messages').add(_messagePayload(message));
+  }
+
+  Future<void> reactToMessage({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+  }) async {
+    if (!firebaseEnabled || conversationId.startsWith('demo')) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      return;
+    }
+
+    await _db
+        .collection('conversations')
+        .doc(conversationId)
+        .collection('messages')
+        .doc(messageId)
+        .set({
+          'reactions': {emoji: FieldValue.increment(1)},
+        }, SetOptions(merge: true));
+  }
+
+  Future<void> markMessagesRead(String conversationId) async {
+    if (!firebaseEnabled || conversationId.startsWith('demo')) return;
+    await _db.collection('conversations').doc(conversationId).set({
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> sendVoiceMessage({
@@ -413,11 +538,55 @@ class ChatRepository {
       'senderId': sender.id,
       'text': '',
       'type': 'voice',
+      'status': 'sent',
       'audioUrl': audioUrl,
       'audioDurationMs': duration.inMilliseconds,
       'storagePath': storagePath,
       'createdAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  static String _previewForMessage(ChatMessage message) {
+    return switch (message.type) {
+      MessageType.text => message.text,
+      MessageType.image => 'Image',
+      MessageType.video => 'Video',
+      MessageType.document => message.mediaTitle ?? 'Document',
+      MessageType.audio => 'Audio',
+      MessageType.voice => 'Voice message',
+      MessageType.gif => 'GIF',
+      MessageType.sticker => 'Sticker',
+      MessageType.location => message.mediaTitle ?? 'Location',
+      MessageType.contact => message.mediaTitle ?? 'Contact',
+      MessageType.poll => message.text.isEmpty ? 'Poll' : message.text,
+    };
+  }
+
+  static Map<String, Object?> _messagePayload(ChatMessage message) {
+    return {
+      'senderId': message.senderId,
+      'text': message.text,
+      'type': message.type.name,
+      'status': MessageStatus.sent.name,
+      'audioUrl': message.audioUrl,
+      'audioDurationMs': message.audioDuration.inMilliseconds,
+      'storagePath': message.storagePath,
+      'mediaUrl': message.mediaUrl,
+      'mediaTitle': message.mediaTitle,
+      'caption': message.caption,
+      'replyToText': message.replyToText,
+      'replyToSender': message.replyToSender,
+      'reactions': message.reactions,
+      'forwarded': message.forwarded,
+      'starred': message.starred,
+      'pinned': message.pinned,
+      'ephemeral': message.ephemeral,
+      'viewOnce': message.viewOnce,
+      'pollOptions': message.pollOptions
+          .map((option) => option.toMap())
+          .toList(),
+      'createdAt': FieldValue.serverTimestamp(),
+    };
   }
 
   Future<void> _upsertConnection({

@@ -23,12 +23,13 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'YOUR_WEB_API_KEY',
-    appId: '1:000000000000:web:0000000000000000000000',
-    messagingSenderId: '000000000000',
-    projectId: 'YOUR_PROJECT_ID',
-    authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyC56P7mbfZtw_y0j51WmJKV2U6IBbCwl38',
+    appId: '1:213800371663:web:9f902e3323625b45703eba',
+    messagingSenderId: '213800371663',
+    projectId: 'fir-8b7cc',
+    authDomain: 'fir-8b7cc.firebaseapp.com',
+    storageBucket: 'fir-8b7cc.firebasestorage.app',
+    measurementId: 'G-7PMHY6NJJT',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
@@ -40,11 +41,11 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'YOUR_IOS_API_KEY',
-    appId: '1:000000000000:ios:0000000000000000000000',
-    messagingSenderId: '000000000000',
-    projectId: 'YOUR_PROJECT_ID',
-    storageBucket: 'YOUR_PROJECT_ID.appspot.com',
+    apiKey: 'AIzaSyA5R-BUPR2OY-Ju6FmZ4667FZga06YVutM',
+    appId: '1:213800371663:ios:b25c9acc4ee7f9a1703eba',
+    messagingSenderId: '213800371663',
+    projectId: 'fir-8b7cc',
+    storageBucket: 'fir-8b7cc.firebasestorage.app',
     iosBundleId: 'com.example.chatApp',
   );
 }

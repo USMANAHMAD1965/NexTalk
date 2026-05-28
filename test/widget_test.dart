@@ -8,7 +8,8 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Welcome Back!'), findsOneWidget);
-    expect(find.text('Sign In'), findsOneWidget);
+    expect(find.text('Welcome Back'), findsOneWidget);
+    expect(find.text('Send OTP'), findsOneWidget);
+    expect(find.text('Phone Number (+923001234567)'), findsOneWidget);
   });
 }

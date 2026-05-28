@@ -143,7 +143,23 @@ class Conversation {
   }
 }
 
-enum MessageType { text, voice }
+enum MessageType {
+  text,
+  image,
+  video,
+  document,
+  audio,
+  voice,
+  gif,
+  sticker,
+  location,
+  contact,
+  poll,
+}
+
+enum MessageStatus { sending, sent, delivered, read, failed }
+
+enum PresenceState { online, offline, typing, recording }
 
 class ChatMessage {
   const ChatMessage({
@@ -152,9 +168,22 @@ class ChatMessage {
     required this.text,
     required this.createdAt,
     this.type = MessageType.text,
+    this.status = MessageStatus.read,
     this.audioUrl,
     this.audioDuration = Duration.zero,
     this.storagePath,
+    this.mediaUrl,
+    this.mediaTitle,
+    this.caption,
+    this.replyToText,
+    this.replyToSender,
+    this.reactions = const <String, int>{},
+    this.forwarded = false,
+    this.starred = false,
+    this.pinned = false,
+    this.ephemeral = false,
+    this.viewOnce = false,
+    this.pollOptions = const <PollOption>[],
   });
 
   final String id;
@@ -162,22 +191,45 @@ class ChatMessage {
   final String text;
   final DateTime createdAt;
   final MessageType type;
+  final MessageStatus status;
   final String? audioUrl;
   final Duration audioDuration;
   final String? storagePath;
+  final String? mediaUrl;
+  final String? mediaTitle;
+  final String? caption;
+  final String? replyToText;
+  final String? replyToSender;
+  final Map<String, int> reactions;
+  final bool forwarded;
+  final bool starred;
+  final bool pinned;
+  final bool ephemeral;
+  final bool viewOnce;
+  final List<PollOption> pollOptions;
 
   factory ChatMessage.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data() ?? <String, dynamic>{};
     final typeName = (data['type'] as String?) ?? 'text';
+    final statusName = (data['status'] as String?) ?? 'read';
     final durationMs = data['audioDurationMs'];
+    final reactionsRaw = data['reactions'];
+    final pollOptionsRaw = data['pollOptions'];
     return ChatMessage(
       id: doc.id,
       senderId: (data['senderId'] as String?) ?? 'friend',
       text: (data['text'] as String?) ?? '',
       createdAt: dateFromFirestore(data['createdAt']),
-      type: typeName == 'voice' ? MessageType.voice : MessageType.text,
+      type: MessageType.values.firstWhere(
+        (type) => type.name == typeName,
+        orElse: () => MessageType.text,
+      ),
+      status: MessageStatus.values.firstWhere(
+        (status) => status.name == statusName,
+        orElse: () => MessageStatus.read,
+      ),
       audioUrl: data['audioUrl'] as String?,
       audioDuration: Duration(
         milliseconds: durationMs is int
@@ -187,8 +239,59 @@ class ChatMessage {
             : 0,
       ),
       storagePath: data['storagePath'] as String?,
+      mediaUrl: data['mediaUrl'] as String?,
+      mediaTitle: data['mediaTitle'] as String?,
+      caption: data['caption'] as String?,
+      replyToText: data['replyToText'] as String?,
+      replyToSender: data['replyToSender'] as String?,
+      reactions: reactionsRaw is Map
+          ? reactionsRaw.map(
+              (key, value) =>
+                  MapEntry(key.toString(), value is num ? value.toInt() : 1),
+            )
+          : const <String, int>{},
+      forwarded: data['forwarded'] as bool? ?? false,
+      starred: data['starred'] as bool? ?? false,
+      pinned: data['pinned'] as bool? ?? false,
+      ephemeral: data['ephemeral'] as bool? ?? false,
+      viewOnce: data['viewOnce'] as bool? ?? false,
+      pollOptions: pollOptionsRaw is List
+          ? pollOptionsRaw
+                .whereType<Map>()
+                .map(
+                  (item) => PollOption.fromMap(Map<String, dynamic>.from(item)),
+                )
+                .toList()
+          : const <PollOption>[],
     );
   }
+}
+
+class PollOption {
+  const PollOption({
+    required this.label,
+    required this.votes,
+    this.selectedByMe = false,
+  });
+
+  final String label;
+  final int votes;
+  final bool selectedByMe;
+
+  factory PollOption.fromMap(Map<String, dynamic> data) {
+    final votes = data['votes'];
+    return PollOption(
+      label: (data['label'] as String?) ?? 'Option',
+      votes: votes is num ? votes.toInt() : 0,
+      selectedByMe: data['selectedByMe'] as bool? ?? false,
+    );
+  }
+
+  Map<String, Object?> toMap() => {
+    'label': label,
+    'votes': votes,
+    'selectedByMe': selectedByMe,
+  };
 }
 
 enum RequestStatus { pending, accepted, declined }
