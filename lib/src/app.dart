@@ -1,0 +1,45 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cross_file/cross_file.dart';
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
+import 'package:zego_uikit_prebuilt_call/zego_uikit_prebuilt_call.dart';
+
+import '../firebase_options.dart';
+
+part 'core/firebase_bootstrap.dart';
+part 'core/theme.dart';
+part 'encryption/message_crypto.dart';
+part 'app/chat_app.dart';
+part 'models/models.dart';
+part 'services/chat_repository.dart';
+part 'core/utils.dart';
+part 'screens/splash_screen.dart';
+part 'screens/sign_in_screen.dart';
+part 'screens/sign_up_screen.dart';
+part 'screens/phone_sign_in_screen.dart';
+part 'screens/phone_sign_up_screen.dart';
+part 'screens/forgot_password_screen.dart';
+part 'screens/chat_list_screen.dart';
+part 'screens/incoming_call_overlay.dart';
+part 'screens/chat_screen.dart';
+part 'screens/friends_screen.dart';
+part 'screens/find_people_screen.dart';
+part 'screens/notifications_screen.dart';
+part 'screens/profile_screen.dart';
+part 'screens/change_password_screen.dart';
+part 'shared/widgets.dart';

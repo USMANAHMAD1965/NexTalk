@@ -1,10 +1,9 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 class ChatApp extends StatefulWidget {
-  const ChatApp({super.key, required this.repository, this.showSplash = true});
+  const ChatApp({super.key, required this.repository});
 
   final ChatRepository repository;
-  final bool showSplash;
 
   @override
   State<ChatApp> createState() => _ChatAppState();
@@ -13,23 +12,13 @@ class ChatApp extends StatefulWidget {
 class _ChatAppState extends State<ChatApp> {
   AppUser? _currentUser;
   bool _checkingSession = true;
-  late bool _showSplash;
-  Timer? _splashTimer;
   StreamSubscription<RemoteMessage>? _foregroundMessageSub;
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
   @override
   void initState() {
     super.initState();
-    _showSplash = widget.showSplash;
     _restoreSession();
-    if (_showSplash) {
-      _splashTimer = Timer(const Duration(milliseconds: 1400), () {
-        if (mounted) {
-          setState(() => _showSplash = false);
-        }
-      });
-    }
     if (widget.repository.firebaseEnabled) {
       _foregroundMessageSub = FirebaseMessaging.onMessage.listen((message) {
         final notification = message.notification;
@@ -48,6 +37,7 @@ class _ChatAppState extends State<ChatApp> {
   Future<void> _restoreSession() async {
     final user = await widget.repository.currentUser();
     if (user != null) {
+      await widget.repository.cleanupExpiredCallRequests();
       unawaited(widget.repository.registerNotificationToken(user.id));
     }
     if (!mounted) return;
@@ -70,7 +60,6 @@ class _ChatAppState extends State<ChatApp> {
 
   @override
   void dispose() {
-    _splashTimer?.cancel();
     _foregroundMessageSub?.cancel();
     super.dispose();
   }
@@ -90,21 +79,71 @@ class _ChatAppState extends State<ChatApp> {
   }
 
   Widget _buildHome() {
-    if (_showSplash || _checkingSession) {
+    if (_checkingSession) {
       return const SplashScreen();
     }
 
     if (_currentUser == null) {
-      return LoginScreen(
+      return SignInScreen(
         repository: widget.repository,
         onAuthenticated: _handleAuthenticated,
       );
     }
 
-    return HomeShell(
-      repository: widget.repository,
-      currentUser: _currentUser!,
-      onSignOut: _signOut,
+    return Stack(
+      children: [
+        ChatListScreen(
+          repository: widget.repository,
+          currentUser: _currentUser!,
+          onSignOut: _signOut,
+        ),
+        StreamBuilder<List<CallRequest>>(
+          stream: widget.repository.watchIncomingCallRequests(_currentUser!.id),
+          initialData: const <CallRequest>[],
+          builder: (context, snapshot) {
+            final calls = snapshot.data ?? <CallRequest>[];
+            if (calls.isEmpty) return const SizedBox.shrink();
+            final request = calls.first;
+            final caller = AppUser(
+              id: request.callerId,
+              displayName: request.callerName,
+              email: request.callerEmail,
+              initial: request.callerInitial,
+              online: request.callerOnline,
+              phoneNumber: request.callerPhoneNumber,
+            );
+            return IncomingCallOverlay(
+              request: request,
+              caller: caller,
+              onAccept: () async {
+                final navigator = Navigator.of(context);
+                await widget.repository.acceptCallRequest(request.callId);
+                if (!mounted) return;
+                navigator.push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => request.type == 'video'
+                        ? VideoCallScreen(
+                            repository: widget.repository,
+                            currentUser: _currentUser!,
+                            peer: caller,
+                            callId: request.callId,
+                          )
+                        : VoiceCallScreen(
+                            repository: widget.repository,
+                            currentUser: _currentUser!,
+                            peer: caller,
+                            callId: request.callId,
+                          ),
+                  ),
+                );
+              },
+              onDecline: () async {
+                await widget.repository.rejectCallRequest(request.callId);
+              },
+            );
+          },
+        ),
+      ],
     );
   }
 }

@@ -1,9 +1,9 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 class ChatRepository {
   ChatRepository({required this.firebaseEnabled});
 
-  ChatRepository.demo() : firebaseEnabled = false;
+  ChatRepository.offline() : firebaseEnabled = false;
 
   final bool firebaseEnabled;
   final Map<String, firebase_auth.ConfirmationResult> _webPhoneConfirmations =
@@ -33,8 +33,7 @@ class ChatRepository {
     required String password,
   }) async {
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-      return sampleCurrentUser.copyWith(email: email.trim());
+      throw 'Firebase is not enabled. Sign in requires a real-time Firebase backend.';
     }
 
     try {
@@ -54,14 +53,13 @@ class ChatRepository {
     }
   }
 
-  Future<void> createAccount({
+  Future<AppUser> createAccount({
     required String displayName,
     required String email,
     required String password,
   }) async {
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      return;
+      throw 'Firebase is not enabled. Account creation requires a real-time Firebase backend.';
     }
 
     try {
@@ -69,9 +67,10 @@ class ChatRepository {
         email: email.trim(),
         password: password,
       );
-      await credential.user?.updateDisplayName(displayName.trim());
+      final firebaseUser = credential.user!;
+      await firebaseUser.updateDisplayName(displayName.trim());
       final user = AppUser(
-        id: credential.user!.uid,
+        id: firebaseUser.uid,
         displayName: displayName.trim(),
         email: email.trim(),
         initial: initialFromName(displayName),
@@ -87,8 +86,8 @@ class ChatRepository {
         'emailVerified': false,
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      await credential.user?.sendEmailVerification();
-      await _auth.signOut();
+      await firebaseUser.sendEmailVerification();
+      return user;
     } on Object catch (error) {
       throw friendlyFirebaseError(error);
     }
@@ -140,8 +139,9 @@ class ChatRepository {
     required ValueChanged<String> onFailed,
   }) async {
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-      onCodeSent('demo-verification-id');
+      onFailed(
+        'Firebase is not enabled. Phone OTP requires a real-time Firebase backend.',
+      );
       return;
     }
 
@@ -181,17 +181,7 @@ class ChatRepository {
     String? phoneNumber,
   }) async {
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-      final phone = phoneNumber?.trim().isNotEmpty == true
-          ? phoneNumber!.trim()
-          : '+923001234567';
-      return sampleCurrentUser.copyWith(
-        id: 'demo-phone-user',
-        displayName: 'Phone User',
-        email: phone,
-        initial: 'P',
-        phoneNumber: phone,
-      );
+      throw 'Firebase is not enabled. Confirming phone OTP requires a real-time Firebase backend.';
     }
 
     if (kIsWeb) {
@@ -230,8 +220,7 @@ class ChatRepository {
     );
 
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      return updatedUser;
+      throw 'Firebase is not enabled. Updating a phone user requires a real-time Firebase backend.';
     }
 
     final firebaseUser = _auth.currentUser;
@@ -286,13 +275,7 @@ class ChatRepository {
     required AppUser peer,
   }) async {
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      return Conversation(
-        id: 'demo-${peer.id}',
-        peer: peer,
-        lastMessage: 'Start a conversation',
-        updatedAt: DateTime.now(),
-      );
+      throw 'Firebase is not enabled. Opening a conversation requires a real-time Firebase backend.';
     }
 
     final conversationId = _conversationIdFor(currentUser.id, peer.id);
@@ -334,12 +317,6 @@ class ChatRepository {
     if (normalizedEmail.isEmpty) return null;
 
     if (!firebaseEnabled) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      for (final user in samplePeople()) {
-        if (user.email.toLowerCase() == normalizedEmail) {
-          return user;
-        }
-      }
       return null;
     }
 
@@ -379,9 +356,203 @@ class ChatRepository {
     return openConversation(currentUser: currentUser, peer: peer);
   }
 
+  Future<AppUser?> findUserByPhone({
+    required String phone,
+    required String currentUserId,
+  }) async {
+    if (phone.trim().isEmpty) return null;
+    final normalizedPhone = phone.trim();
+
+    if (!firebaseEnabled) {
+      return null;
+    }
+
+    final users = await _db
+        .collection('users')
+        .where('phoneNumber', isEqualTo: normalizedPhone)
+        .limit(1)
+        .get();
+    if (users.docs.isNotEmpty && users.docs.first.id != currentUserId) {
+      return AppUser.fromFirestore(users.docs.first);
+    }
+    return null;
+  }
+
+  Future<Conversation> openConversationByPhone({
+    required AppUser currentUser,
+    required String phone,
+  }) async {
+    final peer = await findUserByPhone(
+      phone: phone,
+      currentUserId: currentUser.id,
+    );
+    if (peer == null) {
+      throw 'No registered user found with that phone number.';
+    }
+    return openConversation(currentUser: currentUser, peer: peer);
+  }
+
+  Future<void> createCallRequest({
+    required String callId,
+    required AppUser caller,
+    required AppUser callee,
+    required String type,
+  }) async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    final expiresAt = now.add(const Duration(seconds: 45));
+    await _db.collection('call_requests').doc(callId).set({
+      'callId': callId,
+      'callerId': caller.id,
+      'calleeId': callee.id,
+      'callerName': caller.displayName,
+      'callerEmail': caller.email,
+      'callerInitial': caller.initial,
+      'callerOnline': caller.online,
+      'callerPhoneNumber': caller.phoneNumber,
+      'type': type,
+      'status': 'ringing',
+      'createdAt': Timestamp.fromDate(now),
+      'updatedAt': Timestamp.fromDate(now),
+      'expiresAt': Timestamp.fromDate(expiresAt),
+    }, SetOptions(merge: true));
+
+    await _db.collection('notifications').add({
+      'recipientId': callee.id,
+      'senderId': caller.id,
+      'type': type == 'video' ? 'incomingVideoCall' : 'incomingVoiceCall',
+      'title': '${caller.displayName} is calling you',
+      'body': type == 'video' ? 'Incoming video call' : 'Incoming voice call',
+      'read': false,
+      'createdAt': Timestamp.fromDate(now),
+    });
+  }
+
+  Stream<List<CallRequest>> watchIncomingCallRequests(String currentUserId) {
+    if (!firebaseEnabled) {
+      return Stream<List<CallRequest>>.value(<CallRequest>[]);
+    }
+
+    return _db
+        .collection('call_requests')
+        .where('calleeId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: 'ringing')
+        .snapshots()
+        .asyncMap((snapshot) async {
+          final requests = snapshot.docs
+              .map(CallRequest.fromFirestore)
+              .toList();
+
+          for (final request in requests) {
+            if (request.status == 'ringing' && !request.isRinging) {
+              await _rejectExpiredCallRequestIfNeeded(request);
+            }
+          }
+
+          return requests.where((request) => request.isRinging).toList()
+            ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        });
+  }
+
+  Stream<CallRequest?> watchCallRequest(String callId) {
+    if (!firebaseEnabled) {
+      return Stream<CallRequest?>.value(null);
+    }
+
+    return _db.collection('call_requests').doc(callId).snapshots().asyncMap((
+      snapshot,
+    ) async {
+      if (!snapshot.exists) return null;
+      final request = CallRequest.fromFirestore(snapshot);
+      if (request.status == 'ringing' && !request.isRinging) {
+        await _rejectExpiredCallRequestIfNeeded(request);
+        return request.copyWith(status: 'rejected');
+      }
+      return request;
+    });
+  }
+
+  Future<void> _rejectExpiredCallRequestIfNeeded(CallRequest request) async {
+    if (request.status != 'ringing' || request.isRinging) return;
+
+    await _db.collection('call_requests').doc(request.callId).set({
+      'status': 'rejected',
+      'updatedAt': Timestamp.fromDate(DateTime.now().toUtc()),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> acceptCallRequest(String callId) async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return;
+    }
+
+    await _db.collection('call_requests').doc(callId).set({
+      'status': 'accepted',
+      'updatedAt': Timestamp.fromDate(DateTime.now().toUtc()),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> rejectCallRequest(String callId) async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return;
+    }
+
+    await _db.collection('call_requests').doc(callId).set({
+      'status': 'rejected',
+      'updatedAt': Timestamp.fromDate(DateTime.now().toUtc()),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> endCallRequest(String callId) async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return;
+    }
+
+    await _db.collection('call_requests').doc(callId).set({
+      'status': 'ended',
+      'updatedAt': Timestamp.fromDate(DateTime.now().toUtc()),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> cleanupExpiredCallRequests() async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    final ringingSnapshot = await _db
+        .collection('call_requests')
+        .where('status', isEqualTo: 'ringing')
+        .get();
+
+    final expiredDocs = ringingSnapshot.docs.where((doc) {
+      final expiresAt = dateFromFirestore(doc.data()['expiresAt']);
+      return expiresAt.isBefore(now) || expiresAt.isAtSameMomentAs(now);
+    }).toList();
+
+    if (expiredDocs.isEmpty) return;
+
+    final batch = _db.batch();
+    for (final doc in expiredDocs) {
+      batch.update(doc.reference, {
+        'status': 'rejected',
+        'updatedAt': Timestamp.fromDate(now),
+      });
+    }
+    await batch.commit();
+  }
+
   Stream<List<Conversation>> watchConversations(String currentUserId) {
     if (!firebaseEnabled) {
-      return Stream<List<Conversation>>.value(sampleConversations());
+      return const Stream<List<Conversation>>.empty();
     }
 
     return _db
@@ -399,8 +570,8 @@ class ChatRepository {
   }
 
   Stream<List<ChatMessage>> watchMessages(String conversationId) {
-    if (!firebaseEnabled || conversationId.startsWith('demo')) {
-      return Stream<List<ChatMessage>>.value(sampleMessages());
+    if (!firebaseEnabled) {
+      return const Stream<List<ChatMessage>>.empty();
     }
 
     return _db
@@ -419,9 +590,8 @@ class ChatRepository {
     required AppUser sender,
     required String text,
   }) async {
-    if (!firebaseEnabled || conversation.id.startsWith('demo')) {
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-      return;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Sending a message requires a real-time Firebase backend.';
     }
 
     final conversationRef = _db
@@ -452,9 +622,8 @@ class ChatRepository {
     required AppUser sender,
     required ChatMessage message,
   }) async {
-    if (!firebaseEnabled || conversation.id.startsWith('demo')) {
-      await Future<void>.delayed(const Duration(milliseconds: 220));
-      return;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Sending a rich message requires a real-time Firebase backend.';
     }
 
     final preview = _previewForMessage(message);
@@ -479,9 +648,8 @@ class ChatRepository {
     required String messageId,
     required String emoji,
   }) async {
-    if (!firebaseEnabled || conversationId.startsWith('demo')) {
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      return;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Reacting to messages requires a real-time Firebase backend.';
     }
 
     await _db
@@ -495,7 +663,9 @@ class ChatRepository {
   }
 
   Future<void> markMessagesRead(String conversationId) async {
-    if (!firebaseEnabled || conversationId.startsWith('demo')) return;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Marking messages as read requires a real-time Firebase backend.';
+    }
     await _db.collection('conversations').doc(conversationId).set({
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -507,9 +677,8 @@ class ChatRepository {
     required String localAudioPath,
     required Duration duration,
   }) async {
-    if (!firebaseEnabled || conversation.id.startsWith('demo')) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      return;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Sending a voice message requires a real-time Firebase backend.';
     }
 
     final conversationRef = _db
@@ -665,7 +834,7 @@ class ChatRepository {
 
   Stream<List<AppUser>> watchFindPeople(String currentUserId) {
     if (!firebaseEnabled) {
-      return Stream<List<AppUser>>.value(samplePeople());
+      return const Stream<List<AppUser>>.empty();
     }
 
     return _db.collection('users').snapshots().map((snapshot) {
@@ -681,7 +850,7 @@ class ChatRepository {
 
   Stream<List<AppUser>> watchFriends(String currentUserId) {
     if (!firebaseEnabled) {
-      return Stream<List<AppUser>>.value(sampleFriends());
+      return const Stream<List<AppUser>>.empty();
     }
 
     return _db
@@ -707,7 +876,8 @@ class ChatRepository {
       return;
     }
 
-    await _db.collection('friendRequests').add({
+    final requestRef = _db.collection('friendRequests').doc();
+    await requestRef.set({
       'fromUid': currentUser.id,
       'fromName': currentUser.displayName,
       'fromEmail': currentUser.email,
@@ -722,6 +892,7 @@ class ChatRepository {
       'title': 'New Friend Request',
       'body': '${currentUser.displayName} sent you a friend request',
       'type': 'friendRequest',
+      'friendRequestId': requestRef.id,
       'read': false,
       'createdAt': FieldValue.serverTimestamp(),
     });
@@ -732,7 +903,7 @@ class ChatRepository {
     required bool sent,
   }) {
     if (!firebaseEnabled) {
-      return Stream<List<FriendRequest>>.value(sampleRequests(sentByMe: sent));
+      return const Stream<List<FriendRequest>>.empty();
     }
 
     final field = sent ? 'fromUid' : 'toUid';
@@ -755,17 +926,8 @@ class ChatRepository {
     required RequestStatus status,
     required AppUser currentUser,
   }) async {
-    if (!firebaseEnabled || request.id.startsWith('demo')) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      if (status == RequestStatus.accepted) {
-        return Conversation(
-          id: 'demo-${request.user.id}',
-          peer: request.user,
-          lastMessage: 'Start a conversation',
-          updatedAt: DateTime.now(),
-        );
-      }
-      return null;
+    if (!firebaseEnabled) {
+      throw 'Firebase is not enabled. Updating a friend request requires a real-time Firebase backend.';
     }
 
     await _db.collection('friendRequests').doc(request.id).update({
@@ -791,7 +953,7 @@ class ChatRepository {
 
   Stream<List<AppNotification>> watchNotifications(String currentUserId) {
     if (!firebaseEnabled) {
-      return Stream<List<AppNotification>>.value(sampleNotifications());
+      return const Stream<List<AppNotification>>.empty();
     }
 
     return _db
@@ -806,6 +968,23 @@ class ChatRepository {
         });
   }
 
+  Future<FriendRequest?> fetchFriendRequestById(
+    String requestId,
+    String currentUserId,
+  ) async {
+    if (!firebaseEnabled) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      return null;
+    }
+
+    final doc = await _db.collection('friendRequests').doc(requestId).get();
+    if (!doc.exists) return null;
+    final data = doc.data();
+    if (data == null) return null;
+    final sentByMe = data['fromUid'] == currentUserId;
+    return FriendRequest.fromFirestore(doc, sentByMe);
+  }
+
   Future<void> markNotificationsRead(String currentUserId) async {
     if (!firebaseEnabled) return;
     final snapshot = await _db
@@ -818,6 +997,11 @@ class ChatRepository {
       batch.update(doc.reference, {'read': true});
     }
     await batch.commit();
+  }
+
+  Future<void> deleteNotification(String notificationId) async {
+    if (!firebaseEnabled) return;
+    await _db.collection('notifications').doc(notificationId).delete();
   }
 
   bool _requiresEmailVerification(firebase_auth.User user) {

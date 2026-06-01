@@ -1,4 +1,4 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 class AppUser {
   const AppUser({
@@ -79,8 +79,9 @@ class Conversation {
 
   factory Conversation.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
-    String currentUserId,
-  ) {
+    String currentUserId, {
+    String? decryptedLastMessage,
+  }) {
     final data = doc.data() ?? <String, dynamic>{};
     final participants =
         (data['participants'] as List?)?.whereType<String>().toList() ??
@@ -112,7 +113,8 @@ class Conversation {
         (data['peerEmail'] as String?) ??
         peerPhone ??
         'friend@example.com';
-    final lastMessage = (data['lastMessage'] as String?)?.trim();
+    final lastMessage =
+        decryptedLastMessage ?? (data['lastMessage'] as String?)?.trim();
 
     return Conversation(
       id: doc.id,
@@ -139,6 +141,98 @@ class Conversation {
           : unreadValue is num
           ? unreadValue.toInt()
           : data['unreadCount'] as int? ?? 0,
+    );
+  }
+}
+
+class CallRequest {
+  const CallRequest({
+    required this.callId,
+    required this.callerId,
+    required this.calleeId,
+    required this.callerName,
+    required this.callerEmail,
+    required this.callerInitial,
+    required this.callerPhoneNumber,
+    required this.callerOnline,
+    required this.type,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.expiresAt,
+  });
+
+  final String callId;
+  final String callerId;
+  final String calleeId;
+  final String callerName;
+  final String callerEmail;
+  final String callerInitial;
+  final bool callerOnline;
+  final String? callerPhoneNumber;
+  final String type;
+  final String status;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime expiresAt;
+
+  CallRequest copyWith({
+    String? callId,
+    String? callerId,
+    String? calleeId,
+    String? callerName,
+    String? callerEmail,
+    String? callerInitial,
+    bool? callerOnline,
+    String? callerPhoneNumber,
+    String? type,
+    String? status,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    DateTime? expiresAt,
+  }) {
+    return CallRequest(
+      callId: callId ?? this.callId,
+      callerId: callerId ?? this.callerId,
+      calleeId: calleeId ?? this.calleeId,
+      callerName: callerName ?? this.callerName,
+      callerEmail: callerEmail ?? this.callerEmail,
+      callerInitial: callerInitial ?? this.callerInitial,
+      callerOnline: callerOnline ?? this.callerOnline,
+      callerPhoneNumber: callerPhoneNumber ?? this.callerPhoneNumber,
+      type: type ?? this.type,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      expiresAt: expiresAt ?? this.expiresAt,
+    );
+  }
+
+  bool get isRinging =>
+      status == 'ringing' && DateTime.now().toUtc().isBefore(expiresAt);
+
+  bool get isAccepted => status == 'accepted';
+
+  bool get isRejected => status == 'rejected';
+
+  factory CallRequest.fromFirestore(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? <String, dynamic>{};
+    return CallRequest(
+      callId: (data['callId'] as String?) ?? doc.id,
+      callerId: (data['callerId'] as String?) ?? 'caller',
+      calleeId: (data['calleeId'] as String?) ?? 'callee',
+      callerName: (data['callerName'] as String?) ?? 'Caller',
+      callerEmail: (data['callerEmail'] as String?) ?? 'caller@example.com',
+      callerInitial: (data['callerInitial'] as String?) ?? 'C',
+      callerOnline: data['callerOnline'] as bool? ?? false,
+      callerPhoneNumber: (data['callerPhoneNumber'] as String?)?.trim(),
+      type: (data['type'] as String?) ?? 'voice',
+      status: (data['status'] as String?) ?? 'ringing',
+      createdAt: dateFromFirestore(data['createdAt']),
+      updatedAt: dateFromFirestore(data['updatedAt']),
+      expiresAt: dateFromFirestore(data['expiresAt']),
     );
   }
 }
@@ -209,8 +303,11 @@ class ChatMessage {
   final List<PollOption> pollOptions;
 
   factory ChatMessage.fromFirestore(
-    DocumentSnapshot<Map<String, dynamic>> doc,
-  ) {
+    DocumentSnapshot<Map<String, dynamic>> doc, {
+    String? decryptedText,
+    String? decryptedCaption,
+    String? decryptedReplyToText,
+  }) {
     final data = doc.data() ?? <String, dynamic>{};
     final typeName = (data['type'] as String?) ?? 'text';
     final statusName = (data['status'] as String?) ?? 'read';
@@ -220,7 +317,7 @@ class ChatMessage {
     return ChatMessage(
       id: doc.id,
       senderId: (data['senderId'] as String?) ?? 'friend',
-      text: (data['text'] as String?) ?? '',
+      text: decryptedText ?? (data['text'] as String?) ?? '',
       createdAt: dateFromFirestore(data['createdAt']),
       type: MessageType.values.firstWhere(
         (type) => type.name == typeName,
@@ -241,8 +338,8 @@ class ChatMessage {
       storagePath: data['storagePath'] as String?,
       mediaUrl: data['mediaUrl'] as String?,
       mediaTitle: data['mediaTitle'] as String?,
-      caption: data['caption'] as String?,
-      replyToText: data['replyToText'] as String?,
+      caption: decryptedCaption ?? data['caption'] as String?,
+      replyToText: decryptedReplyToText ?? data['replyToText'] as String?,
       replyToSender: data['replyToSender'] as String?,
       reactions: reactionsRaw is Map
           ? reactionsRaw.map(
@@ -348,6 +445,8 @@ class AppNotification {
     required this.createdAt,
     this.read = false,
     this.accepted = false,
+    this.type = 'generic',
+    this.friendRequestId,
   });
 
   final String id;
@@ -356,6 +455,10 @@ class AppNotification {
   final DateTime createdAt;
   final bool read;
   final bool accepted;
+  final String type;
+  final String? friendRequestId;
+
+  bool get isFriendRequest => type == 'friendRequest';
 
   factory AppNotification.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -368,6 +471,8 @@ class AppNotification {
       createdAt: dateFromFirestore(data['createdAt']),
       read: data['read'] as bool? ?? false,
       accepted: data['type'] == 'friendAccepted',
+      type: (data['type'] as String?) ?? 'generic',
+      friendRequestId: data['friendRequestId'] as String?,
     );
   }
 }

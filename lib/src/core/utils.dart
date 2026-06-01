@@ -1,4 +1,4 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 String friendlyFirebaseError(Object error) {
   if (error is firebase_auth.FirebaseAuthException) {

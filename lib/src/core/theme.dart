@@ -1,4 +1,4 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 class AppColors {
   static const primary = Color(0xFF6D57E8);

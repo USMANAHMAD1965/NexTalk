@@ -1,4 +1,4 @@
-part of '../../main.dart';
+part of '../app.dart';
 
 class FirebaseBootstrap {
   static Future<bool> initialize() async {
