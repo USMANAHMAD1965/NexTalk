@@ -1,11 +1,17 @@
 part of '../app.dart';
 
 class ChatRepository {
-  ChatRepository({required this.firebaseEnabled});
+  ChatRepository({
+    required this.firebaseEnabled,
+    MessageEncryptionService? encryptionService,
+  }) : _encryptionService = encryptionService ?? MessageEncryptionService();
 
-  ChatRepository.offline() : firebaseEnabled = false;
+  ChatRepository.offline([MessageEncryptionService? encryptionService])
+      : firebaseEnabled = false,
+        _encryptionService = encryptionService ?? MessageEncryptionService();
 
   final bool firebaseEnabled;
+  final MessageEncryptionService _encryptionService;
   final Map<String, firebase_auth.ConfirmationResult> _webPhoneConfirmations =
       <String, firebase_auth.ConfirmationResult>{};
 
@@ -580,9 +586,13 @@ class ChatRepository {
         .collection('messages')
         .orderBy('createdAt')
         .snapshots()
-        .map(
-          (snapshot) => snapshot.docs.map(ChatMessage.fromFirestore).toList(),
-        );
+        .asyncMap((snapshot) async {
+          return await Future.wait(
+            snapshot.docs.map(
+              (doc) => _decryptMessage(doc, conversationId),
+            ),
+          );
+        });
   }
 
   Future<void> sendMessage({
@@ -597,23 +607,28 @@ class ChatRepository {
     final conversationRef = _db
         .collection('conversations')
         .doc(conversation.id);
+    final encryptedFields = await _encryptMessageFields(
+      conversationId: conversation.id,
+      text: text,
+    );
+
     await conversationRef.set({
       'participants': _sortedParticipantIds(sender.id, conversation.peer.id),
       'participantInfo': {
         sender.id: _userSummary(sender),
         conversation.peer.id: _userSummary(conversation.peer),
       },
-      'lastMessage': text,
+      'lastMessage': MessageEncryptionService.encryptedPreview,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
     await _upsertConnection(currentUser: sender, peer: conversation.peer);
     await conversationRef.collection('messages').add({
       'senderId': sender.id,
-      'text': text,
       'type': 'text',
       'status': 'sent',
       'reactions': <String, int>{},
       'createdAt': FieldValue.serverTimestamp(),
+      ...encryptedFields,
     });
   }
 
@@ -626,7 +641,10 @@ class ChatRepository {
       throw 'Firebase is not enabled. Sending a rich message requires a real-time Firebase backend.';
     }
 
-    final preview = _previewForMessage(message);
+    final preview = message.type == MessageType.text ||
+            message.type == MessageType.poll
+        ? MessageEncryptionService.encryptedPreview
+        : _previewForMessage(message);
     final conversationRef = _db
         .collection('conversations')
         .doc(conversation.id);
@@ -640,7 +658,9 @@ class ChatRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
     await _upsertConnection(currentUser: sender, peer: conversation.peer);
-    await conversationRef.collection('messages').add(_messagePayload(message));
+    await conversationRef.collection('messages').add(
+      await _messagePayload(message, conversation.id),
+    );
   }
 
   Future<void> reactToMessage({
@@ -731,10 +751,12 @@ class ChatRepository {
     };
   }
 
-  static Map<String, Object?> _messagePayload(ChatMessage message) {
-    return {
+  Future<Map<String, Object?>> _messagePayload(
+    ChatMessage message,
+    String conversationId,
+  ) async {
+    final payload = <String, Object?>{
       'senderId': message.senderId,
-      'text': message.text,
       'type': message.type.name,
       'status': MessageStatus.sent.name,
       'audioUrl': message.audioUrl,
@@ -742,8 +764,6 @@ class ChatRepository {
       'storagePath': message.storagePath,
       'mediaUrl': message.mediaUrl,
       'mediaTitle': message.mediaTitle,
-      'caption': message.caption,
-      'replyToText': message.replyToText,
       'replyToSender': message.replyToSender,
       'reactions': message.reactions,
       'forwarded': message.forwarded,
@@ -756,6 +776,112 @@ class ChatRepository {
           .toList(),
       'createdAt': FieldValue.serverTimestamp(),
     };
+
+    payload.addAll(await _encryptMessageFields(
+      conversationId: conversationId,
+      text: message.text,
+      caption: message.caption,
+      replyToText: message.replyToText,
+    ));
+
+    return payload;
+  }
+
+  Future<Map<String, Object?>> _encryptMessageFields({
+    required String conversationId,
+    required String text,
+    String? caption,
+    String? replyToText,
+  }) async {
+    final payload = <String, Object?>{};
+
+    if (text.isNotEmpty) {
+      final encrypted = await _encryptionService.encryptText(
+        conversationId: conversationId,
+        text: text,
+      );
+      payload['text'] = encrypted.ciphertext;
+      payload.addAll(encrypted.toPrefixedMap('text'));
+    } else {
+      payload['text'] = '';
+    }
+
+    if (caption?.isNotEmpty == true) {
+      final encrypted = await _encryptionService.encryptText(
+        conversationId: conversationId,
+        text: caption!,
+      );
+      payload['caption'] = encrypted.ciphertext;
+      payload.addAll(encrypted.toPrefixedMap('caption'));
+    } else if (caption != null) {
+      payload['caption'] = caption;
+    }
+
+    if (replyToText?.isNotEmpty == true) {
+      final encrypted = await _encryptionService.encryptText(
+        conversationId: conversationId,
+        text: replyToText!,
+      );
+      payload['replyToText'] = encrypted.ciphertext;
+      payload.addAll(encrypted.toPrefixedMap('replyToText'));
+    } else if (replyToText != null) {
+      payload['replyToText'] = replyToText;
+    }
+
+    return payload;
+  }
+
+  Future<ChatMessage> _decryptMessage(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+    String conversationId,
+  ) async {
+    final data = doc.data() ?? <String, dynamic>{};
+    String? decryptedText;
+    String? decryptedCaption;
+    String? decryptedReplyToText;
+
+    final textPayload = EncryptedMessagePayload.fromPrefixedData(data, 'text');
+    if (textPayload != null) {
+      try {
+        decryptedText = await _encryptionService.decryptText(
+          conversationId: conversationId,
+          payload: textPayload,
+        );
+      } on Object {
+        decryptedText = MessageEncryptionService.decryptFailedPreview;
+      }
+    }
+
+    final captionPayload = EncryptedMessagePayload.fromPrefixedData(data, 'caption');
+    if (captionPayload != null) {
+      try {
+        decryptedCaption = await _encryptionService.decryptText(
+          conversationId: conversationId,
+          payload: captionPayload,
+        );
+      } on Object {
+        decryptedCaption = MessageEncryptionService.decryptFailedPreview;
+      }
+    }
+
+    final replyPayload = EncryptedMessagePayload.fromPrefixedData(data, 'replyToText');
+    if (replyPayload != null) {
+      try {
+        decryptedReplyToText = await _encryptionService.decryptText(
+          conversationId: conversationId,
+          payload: replyPayload,
+        );
+      } on Object {
+        decryptedReplyToText = MessageEncryptionService.decryptFailedPreview;
+      }
+    }
+
+    return ChatMessage.fromFirestore(
+      doc,
+      decryptedText: decryptedText,
+      decryptedCaption: decryptedCaption,
+      decryptedReplyToText: decryptedReplyToText,
+    );
   }
 
   Future<void> _upsertConnection({
